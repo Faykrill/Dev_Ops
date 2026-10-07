@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ "feat/scrapper", "main" ]
+    branches: [ "feat/Scraper", "main" ]
 
 jobs:
   build-and-test:
