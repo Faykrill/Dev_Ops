@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ "feat/quotes-scrapper", "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [ "feat/scrapper", "main" ]
 
 jobs:
   build-and-test:
