@@ -1,50 +1,51 @@
-# Стадия 1: Сборка и установка зависимостей
-FROM node:22-bookworm AS builder
+# ==========================================
+# Стадия 1: Установка браузера (параллельная)
+# ==========================================
+FROM python:3.13.7-bookworm AS browser
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Устанавливаем сам playwright, чтобы скачать браузер
+RUN pip install --no-cache-dir playwright==1.48.0
+RUN playwright install chromium
+
+# ==========================================
+# Стадия 2: Установка Python-зависимостей (параллельная)
+# ==========================================
+FROM python:3.13.7-bookworm AS deps
 
 WORKDIR /app
-
-# Устанавливаем Python и инструменты для venv
-RUN apt-get update && apt-get install -y python3 python3-pip python3-venv && rm -rf /var/lib/apt/lists/*
 
 # Создаем виртуальное окружение
-RUN python3 -m venv /opt/venv
+RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Явно указываем Playwright, куда качать браузеры
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
+# Копируем файл зависимостей и устанавливаем их
 COPY requirements.txt .
-
-# Устанавливаем зависимости и браузер (это закэшируется!)
 RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install chromium
-# В builder тоже ставим deps, чтобы кэш был полным, хотя для runner мы продублируем
-RUN playwright install-deps chromium
 
-# Стадия 2: Финальный образ (runner)
-FROM node:22-bookworm AS runner
+# ==========================================
+# Стадия 3: Финальный образ (собирает всё вместе)
+# ==========================================
+FROM python:3.13.7-bookworm AS runner
 
 WORKDIR /app
 
-# В финальном образе нужен только python3
-RUN apt-get update && apt-get install -y python3 && rm -rf /var/lib/apt/lists/*
+# Копируем готовое виртуальное окружение из deps
+COPY --from=deps /opt/venv /opt/venv
 
-# Копируем браузеры из стадии builder
-COPY --from=builder /ms-playwright /ms-playwright
+# Копируем скачанный браузер из browser
+COPY --from=browser /ms-playwright /ms-playwright
 
-# Копируем виртуальное окружение
-COPY --from=builder /opt/venv /opt/venv
-
-# Восстанавливаем переменные окружения для runner
+# Настраиваем переменные окружения
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# ВАЖНО: Устанавливаем системные зависимости ОС для запуска браузера в финальном образе
-# Это быстро, так как сам браузер уже скопирован, качаются только мелкие системные библиотеки
-RUN /opt/venv/bin/playwright install-deps chromium
+# Устанавливаем системные библиотеки для запуска браузера
+RUN playwright install-deps chromium
 
 # Копируем исходный код
 COPY src/ ./src/
 
-# Запускаем скрипт
-CMD ["/opt/venv/bin/python", "src/main.py"]
+# Команда запуска
+CMD ["python", "src/main.py"]
