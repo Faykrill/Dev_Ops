@@ -44,6 +44,7 @@ destroy:
 ci:
 	@echo Запуск CI проверок Terraform...
 	terraform fmt -check
+	terraform init -backend=false
 	terraform validate
 	terraform plan
 	@echo CI проверки Terraform пройдены успешно!
