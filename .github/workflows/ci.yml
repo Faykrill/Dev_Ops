@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ "Scraper", "main" ]
+    branches: [ "Terraform", "main" ]
 
 jobs:
   terraform-ci:
