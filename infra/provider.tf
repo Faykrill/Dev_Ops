@@ -5,8 +5,6 @@ provider "aws" {
   access_key = var.aws_access_key
   secret_key = var.aws_secret_key
 
-  s3_use_path_style = true 
-
   endpoints {
     s3  = var.floci_endpoint
     sqs = var.floci_endpoint
