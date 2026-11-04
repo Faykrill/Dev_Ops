@@ -1,0 +1,49 @@
+# Контейнерная часть проекта: локальное облако Floci, воркер-скрапер и
+# одноразовый отправитель заданий. Жизнью контейнеров управляет Makefile
+# (make provision / deploy / run / destroy), этот файл только описывает сервисы.
+name: dev-ops
+
+x-connection-env: &connection-env
+  AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-http://host.docker.internal:4566}
+  SQS_QUEUE_URL: ${SQS_QUEUE_URL:-http://host.docker.internal:4566/000000000000/scraper-tasks-queue}
+
+x-app-defaults: &app-defaults
+  image: quotes-scraper
+  build:
+    context: .
+    dockerfile: Dockerfile
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  # Локальное облако: S3 + SQS на порту 4566. Данные хранятся в именованном
+  # volume (образ объявляет /app/data как FLOCI_STORAGE_PERSISTENT_PATH),
+  # поэтому повторный make provision не пересоздаёт инфраструктуру.
+  floci:
+    image: floci/floci:2.2.0
+    ports:
+      - "4566:4566"
+    volumes:
+      - floci-data:/app/data
+
+  # Воркер из первой лабораторной: слушает SQS, скрапит страницу, пишет JSON в S3.
+  scraper:
+    <<: *app-defaults
+    container_name: scraper-app
+    depends_on:
+      floci:
+        condition: service_started
+    environment:
+      <<: *connection-env
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-scraper-results-bucket}
+
+  # Продюсер: отправляет одно задание в SQS и завершается. Запускается только
+  # явно (make run) через `docker compose run`, поэтому без depends_on.
+  send-task:
+    <<: *app-defaults
+    command: python src/send_task.py
+    environment:
+      <<: *connection-env
+
+volumes:
+  floci-data:

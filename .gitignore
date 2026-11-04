@@ -179,3 +179,15 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Результаты локальной работы (если остались)
+out/
+
+# Секреты
+.env
+*.pem
