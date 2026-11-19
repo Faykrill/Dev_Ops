@@ -1,0 +1,114 @@
+---
+- name: Отказоустойчивость - падение до XACK и переобработка после рестарта
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: admin
+    results_dir: /srv/quotes-scraper/results
+  tasks:
+    - name: Остановить скрапер для очистки состояния стрима
+      ansible.builtin.command: docker stop scraper
+      register: stop_result
+      failed_when: false
+      changed_when: stop_result.rc == 0
+
+    - name: Очистить стрим jobs (leftovers и pending)
+      ansible.builtin.command: docker exec redis redis-cli DEL jobs
+      changed_when: true
+
+    - name: Запустить скрапер заново (старт с пустого стрима)
+      ansible.builtin.command: docker start scraper
+      changed_when: true
+
+    - name: Дождаться, пока контейнер станет running
+      ansible.builtin.command: docker inspect scraper --format '{{ "{{.State.Status}}" }}'
+      register: container_status
+      until: container_status.stdout | trim == 'running'
+      retries: 15
+      delay: 1
+      changed_when: false
+
+    - name: Дать воркеру инициализироваться на пустом стриме
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Временно отключить авто-рестарт скрапера
+      ansible.builtin.command: docker update --restart=no scraper
+      changed_when: true
+
+    - name: Отправить задание с crash-флагом
+      ansible.builtin.command: >-
+        docker exec scraper python /app/src/send_task.py --crash
+        --job-id {{ job_id }} {{ job_url }}
+      register: send_result
+      failed_when: send_result.rc not in [0, 137] or 'queued' not in send_result.stderr
+      changed_when: true
+
+    - name: Дождаться падения контейнера
+      ansible.builtin.command: docker inspect scraper --format '{{ "{{.State.Status}}" }}'
+      register: container_status
+      until: container_status.stdout | trim == 'exited'
+      retries: 60
+      delay: 1
+      changed_when: false
+
+    - name: Убедиться, что файл результата НЕ создан
+      ansible.builtin.stat:
+        path: "{{ results_dir }}/{{ job_id }}.json"
+      register: file_before
+      failed_when: file_before.stat.exists
+
+    - name: Убедиться, что XPENDING не пуст (задание зависло)
+      ansible.builtin.command: docker exec redis redis-cli XPENDING jobs scrapers - + 10
+      register: xpending_before
+      failed_when: xpending_before.stdout | trim | length == 0
+      changed_when: false
+
+    - name: Запустить контейнер заново
+      ansible.builtin.command: docker start scraper
+      changed_when: true
+
+    - name: Вернуть авто-рестарт
+      ansible.builtin.command: docker update --restart=unless-stopped scraper
+      changed_when: true
+
+    - name: Дождаться появления файла результата
+      ansible.builtin.stat:
+        path: "{{ results_dir }}/{{ job_id }}.json"
+      register: file_after
+      until: file_after.stat.exists
+      retries: 90
+      delay: 2
+
+    - name: Дождаться подтверждения задания (XPENDING пуст)
+      ansible.builtin.command: docker exec redis redis-cli XPENDING jobs scrapers - + 10
+      register: xpending_after
+      until: xpending_after.stdout | trim | length == 0
+      retries: 60
+      delay: 1
+      changed_when: false
+
+    - name: Проверить валидность JSON
+      ansible.builtin.command: >-
+        python3 -c "import json,sys; d=json.load(open('{{ results_dir }}/{{ job_id }}.json')); sys.exit(0 if d else 1)"
+      changed_when: false
+
+    - name: Проверить доступность через Nginx
+      ansible.builtin.command: curl -sf http://localhost/{{ job_id }}.json
+      changed_when: false
+
+    - name: Посчитать временные файлы
+      ansible.builtin.shell: ls {{ results_dir }}/ | grep -c '\.tmp$' || true
+      register: tmp_files
+      changed_when: false
+
+    - name: Убедиться, что временных файлов нет
+      ansible.builtin.assert:
+        that:
+          - tmp_files.stdout | trim == '0'
+        fail_msg: "Найдены временные файлы: {{ tmp_files.stdout }}"
+
+    - name: Итог
+      ansible.builtin.debug:
+        msg: "fault-test OK: падение до XACK → pending → рестарт → дообработано без второго файла"

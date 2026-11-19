@@ -1,0 +1,38 @@
+name: quotes-scraper
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    restart: unless-stopped
+
+  scraper:
+    image: quotes-scraper:latest
+    container_name: scraper
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RESULTS_DIR: /results
+    volumes:
+      - /srv/quotes-scraper/results:/results
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - /srv/quotes-scraper/results:/results:ro
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    depends_on:
+      - redis
+
+volumes:
+  redis-data:

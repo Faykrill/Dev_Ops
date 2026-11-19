@@ -1,0 +1,22 @@
+---
+- name: Отправить одно задание на скрапинг
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: admin
+  tasks:
+    - name: Сформировать команду продюсера
+      ansible.builtin.set_fact:
+        producer_cmd: >-
+          docker exec scraper python /app/src/send_task.py
+          {% if crash | default('') | bool %}--crash{% endif %}
+          --job-id {{ job_id }} {{ job_url }}
+
+    - name: Запустить продюсер
+      ansible.builtin.command: "{{ producer_cmd }}"
+      changed_when: true
+
+    - name: Подтвердить отправку
+      ansible.builtin.debug:
+        msg: "Задание job_id={{ job_id }} добавлено в стрим jobs{% if crash | default('') | bool %} (с crash-флагом){% endif %}"
