@@ -1,0 +1,43 @@
+---
+- name: Создать постоянного пользователя admin
+  ansible.builtin.user:
+    name: admin
+    shell: /bin/bash
+    groups: sudo
+    append: true
+    state: present
+
+- name: Каталог .ssh для admin с правильными правами
+  ansible.builtin.file:
+    path: /home/admin/.ssh
+    state: directory
+    owner: admin
+    group: admin
+    mode: "0700"
+
+- name: Публичный ключ лабы для admin
+  ansible.builtin.authorized_key:
+    user: admin
+    key: "{{ lab_pub_key }}"
+    state: present
+
+- name: NOPASSWD sudo для admin
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-admin
+    owner: root
+    group: root
+    mode: "0440"
+    content: "admin ALL=(ALL) NOPASSWD:ALL\n"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Проверить реальный вход под admin по ключу
+  ansible.builtin.command: >-
+    ssh -i {{ lab_key_file }}
+    -o UserKnownHostsFile={{ lab_known_hosts }}
+    -o StrictHostKeyChecking=yes
+    -o BatchMode=yes
+    -o ConnectTimeout=10
+    admin@{{ ansible_host }} true
+  delegate_to: localhost
+  become: false
+  changed_when: false

@@ -51,6 +51,7 @@ if ssh $SSH_OPTS "admin@$IP" true 2>/dev/null; then USER="admin"; fi
 # 8. Генерируем inventory (в git не коммитится)
 ABS_KEY="$(realpath "$KEY")"
 ABS_KH="$(realpath "$LAB_DIR/known_hosts")"
+mkdir -p infra/ansible/inventories/lab/group_vars
 cat > infra/ansible/inventories/lab/hosts.yml <<EOF
 all:
   hosts:
@@ -60,5 +61,8 @@ all:
       ansible_ssh_private_key_file: $ABS_KEY
       ansible_ssh_common_args: "-o UserKnownHostsFile=$ABS_KH -o StrictHostKeyChecking=yes"
 EOF
-
-echo "VM ready: $IP (user=$USER)"
+cat > infra/ansible/inventories/lab/group_vars/all.yml <<EOF
+lab_key_file: $ABS_KEY
+lab_known_hosts: $ABS_KH
+lab_pub_key: "$PUBKEY"
+EOF

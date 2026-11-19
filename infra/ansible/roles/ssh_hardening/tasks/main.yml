@@ -1,0 +1,28 @@
+---
+- name: Завершить остаточные процессы временного пользователя
+  ansible.builtin.command: pkill -u bootstrap
+  failed_when: false
+  changed_when: false
+
+- name: Удалить временного пользователя bootstrap
+  ansible.builtin.user:
+    name: bootstrap
+    state: absent
+    remove: true
+
+- name: Drop-in sshd с запретами (root, пароли, kbd-interactive)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/00-lab-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Лабораторная 3: вход только по ключу, только для постоянных пользователей
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+  notify: Перезапустить sshd
+
+- name: Проверить конфигурацию sshd (sshd -t)
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false

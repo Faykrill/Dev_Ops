@@ -1,0 +1,19 @@
+---
+- name: Создать пользователя admin и проверить вход по ключу
+  hosts: all
+  become: true
+  gather_facts: false
+  roles:
+    - bootstrap
+
+- name: Ужесточить SSH и убрать временный доступ
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: admin
+  pre_tasks:
+    - name: Сбросить соединение, дальше работаем под admin
+      ansible.builtin.meta: reset_connection
+  roles:
+    - ssh_hardening
