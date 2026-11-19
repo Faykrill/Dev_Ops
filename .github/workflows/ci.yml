@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/ansible-deploy]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Установить Ansible и линтеры
+        run: |
+          pip install ansible ansible-lint yamllint
+
+      - name: Запустить make ci
+        run: make ci

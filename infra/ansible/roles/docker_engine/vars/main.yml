@@ -1,5 +1,5 @@
 ---
-docker_deb_arch: >-
+docker_engine_deb_arch: >-
   {{ 'amd64' if ansible_facts['architecture'] == 'x86_64'
      else 'arm64' if ansible_facts['architecture'] == 'aarch64'
      else ansible_facts['architecture'] }}

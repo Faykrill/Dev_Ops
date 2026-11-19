@@ -29,19 +29,25 @@
       changed_when: false
 
     - name: Проверить доступность результата через Nginx
-      ansible.builtin.command: curl -sf http://localhost/{{ job_id }}.json
+      ansible.builtin.uri:
+        url: http://localhost/{{ job_id }}.json
+        status_code: [200]
       changed_when: false
 
-    - name: Посчитать временные файлы
-      ansible.builtin.shell: ls {{ results_dir }}/ | grep -c '\.tmp$' || true
-      register: tmp_files
+    - name: Найти временные файлы
+      ansible.builtin.find:
+        paths: "{{ results_dir }}"
+        patterns: "*.tmp"
+        hidden: true
+      register: tmp_result
       changed_when: false
 
     - name: Убедиться, что временных файлов нет
       ansible.builtin.assert:
         that:
-          - tmp_files.stdout | trim == '0'
-        fail_msg: "Найдены временные файлы: {{ tmp_files.stdout }}"
+          - tmp_result.matched == 0
+        fail_msg: >-
+          Найдены временные файлы: {{ tmp_result.files | map(attribute='path') | list }}
 
     - name: Итог
       ansible.builtin.debug:
