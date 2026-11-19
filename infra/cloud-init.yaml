@@ -1,0 +1,12 @@
+#cloud-config
+# Только bootstrap: временный пользователь, SSH-ключ, sudo.
+# Python3 уже есть в образе Ubuntu. Docker, приложение и python3-apt
+# ставит Ansible — через cloud-init их ставить нельзя.
+users:
+  - name: bootstrap
+    groups: sudo
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "__BOOTSTRAP_SSH_KEY__"
