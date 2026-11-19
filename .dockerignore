@@ -1,0 +1,13 @@
+.git
+.gitignore
+.gitattributes
+.lab
+infra
+deploy
+scripts
+.github
+README.md
+NOTES.md
+__pycache__
+*.pyc
+.venv
