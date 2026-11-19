@@ -1,0 +1,54 @@
+---
+- name: Проверить результат последнего задания
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    ansible_user: admin
+    results_dir: /srv/quotes-scraper/results
+  tasks:
+    - name: Дождаться появления файла результата
+      ansible.builtin.stat:
+        path: "{{ results_dir }}/{{ job_id }}.json"
+      register: result_file
+      until: result_file.stat.exists
+      retries: 30
+      delay: 2
+
+    - name: Дождаться подтверждения задания (XPENDING пуст)
+      ansible.builtin.command: docker exec redis redis-cli XPENDING jobs scrapers - + 10
+      register: xpending
+      until: xpending.stdout | trim | length == 0
+      retries: 20
+      delay: 1
+      changed_when: false
+
+    - name: Проверить, что результат — валидный непустой JSON
+      ansible.builtin.command: >-
+        python3 -c "import json,sys; d=json.load(open('{{ results_dir }}/{{ job_id }}.json')); sys.exit(0 if d else 1)"
+      changed_when: false
+
+    - name: Проверить доступность результата через Nginx
+      ansible.builtin.uri:
+        url: http://localhost/{{ job_id }}.json
+        status_code: [200]
+      changed_when: false
+
+    - name: Найти временные файлы
+      ansible.builtin.find:
+        paths: "{{ results_dir }}"
+        patterns: "*.tmp"
+        hidden: true
+      register: tmp_result
+      changed_when: false
+
+    - name: Убедиться, что временных файлов нет
+      ansible.builtin.assert:
+        that:
+          - tmp_result.matched == 0
+        fail_msg: >-
+          Найдены временные файлы: {{ tmp_result.files | map(attribute='path') | list }}
+
+    - name: Итог
+      ansible.builtin.debug:
+        msg: "verify OK: {{ job_id }}.json создан, валиден, отдаётся по HTTP, XPENDING пуст"

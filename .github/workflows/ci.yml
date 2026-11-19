@@ -2,17 +2,24 @@ name: CI
 
 on:
   push:
-    branches: [ "Terraform", "main" ]
+    branches: [main, feat/ansible-deploy]
+  pull_request:
+    branches: [main]
 
 jobs:
-  terraform-ci:
+  lint:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Terraform
-      uses: hashicorp/setup-terraform@v3
+      - name: Установить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-    - name: Run make ci
-      run: make ci
+      - name: Установить Ansible и линтеры
+        run: |
+          pip install ansible ansible-lint yamllint
+
+      - name: Запустить make ci
+        run: make ci

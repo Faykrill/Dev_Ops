@@ -1,120 +1,91 @@
-# Quotes Scraper
+# Quotes Scraper — Лабораторная работа 3
 
-Асинхронный скрапер на Python + Playwright, который извлекает цитаты с динамически подгружаемой страницы `https://quotes.toscrape.com/scroll` и сохраняет результат в S3-объект `s3://scraper-results-bucket/result.json`.
+Скрапер цитат с `quotes.toscrape.com/scroll` на Ubuntu 24.04 (Multipass VM). Задания принимает через Redis Streams, результаты сохраняет на диск и отдаёт через Nginx.
 
-Проект построен по модели **producer → queue → worker**: задание кладётся в SQS, воркер забирает его, скрапит страницу через headless Chromium и пишет JSON в S3. AWS-сервисы при этом локальные — их эмулирует контейнер **Floci** (`floci/floci:2.2.0`, порт `4566`), а инфраструктура описана в Terraform. Управление — через `Makefile` как единую точку входа.
+## Требования к хосту
 
-## Как это работает
+- **Windows 10/11** (любая редакция, включая Home)
+- **Multipass 1.17+** с драйвером `hcs` (работает без Hyper-V/VirtualBox)
+- **WSL2** с Ubuntu 24.04 (control node для Make/Ansible)
+- **Сеть**: WSL2 и Multipass используют разные NAT-подсети; требуется либо `networkingMode=mirrored` в `.wslconfig`, либо forwarding между адаптерами `vEthernet (WSL)` и `vEthernet (Multipass vNetwork)`
 
-```
-make run                          make deploy
-(одноразовый контейнер)           (фоновый контейнер scraper-app)
-       │                                  │
-       ▼                                  ▼
-send_task.py ──► SQS: scraper-tasks-queue ──► main.py (цикл receive_message, long polling 10 сек)
-                                                  │
-                                                  ├─ Playwright + Chromium → /scroll, скролл, .quote
-                                                  ▼
-                                          S3: scraper-results-bucket/result.json
-                                                  │
-                                                  └─ delete_message только после успешной записи
+## Архитектура
 
-                S3 и SQS живут в сервисе floci из docker-compose.yaml (порт 4566)
-                (ресурсы описаны в infra/main.tf, состояние — infra/terraform.tfstate)
-```
+make run URL=...
+↓
+send_task.py → Redis Stream "jobs" (consumer group "scrapers")
+↓
+worker.py (Playwright + Chromium) → /srv/quotes-scraper/results/<job_id>.json
+↓
+Nginx (port 80) → HTTP GET /<job_id>.json
 
-Воркер бесконечный: после обработки задания он сразу ждёт следующее. При ошибке сообщение из очереди **не** удаляется и станет доступно повторно после истечения visibility timeout.
+
+- **Redis** с AOF и volume, порт 6379 не публикуется
+- **Nginx** монтирует каталог результатов read-only
+- **Атомарная запись**: временный файл → `os.replace` → финальный JSON
+- **Отказоустойчивость**: `XACK` только после записи; падение до XACK оставляет сообщение в pending, которое переобрабатывается при рестарте
 
 ## Структура
 
-| Путь | Назначение |
-|---|---|
-| `src/main.py` | воркер: SQS → Playwright-скрапинг → S3 → удаление сообщения |
-| `src/send_task.py` | продюсер: отправляет `{"action": "scrape"}` в SQS |
-| `infra/versions.tf` | требуемые версии: Terraform `>= 1.5.0`, провайдер `hashicorp/aws ~> 5.0` |
-| `infra/provider.tf` | провайдер AWS, направленный на эндпоинты Floci (отключены `skip_*` проверки) |
-| `infra/variables.tf` | имена бакета/очереди, эндпоинты, регион и фейковые креды — всё с дефолтами |
-| `infra/main.tf` | ресурсы: бакет `scraper-results-bucket` + очередь `scraper-tasks-queue` |
-| `infra/outputs.tf` | `tasks_queue_url`, `tasks_queue_url_from_host`, `results_bucket_name`, `results_bucket_arn` |
-| `infra/.terraform.lock.hcl` | зафиксирован провайдер `hashicorp/aws` 5.100.0 |
-| `docker-compose.yaml` | сервисы `floci`, `scraper`, `send-task` и volume `floci-data` |
-| `Dockerfile` | multistage-образ `python:3.13.7-bookworm` (стадии `browser`, `deps`, `runner`) |
-| `Makefile` | все команды сборки, деплоя и работы с инфраструктурой |
-| `.github/workflows/ci.yml` | CI: проверки Terraform через `make ci` |
-| `requirements.txt` | `playwright==1.48.0`, `boto3==1.35.0` |
+repo/
+├─ src/worker.py # воркер: Redis Streams → Playwright → JSON → XACK
+├─ src/send_task.py # продюсер: XADD задания в стрим
+├─ Dockerfile # multi-stage образ с Playwright/Chromium
+├─ deploy/ # compose.yaml, nginx.conf, redis.conf
+├─ infra/
+│ ├─ cloud-init.yaml # bootstrap: временный юзер, ключ, sudo, Python
+│ └─ ansible/ # роли: bootstrap, ssh_hardening, docker_engine, scraper
+├─ scripts/ # setup.sh, destroy.sh
+└─ Makefile # единая точка входа
 
-## Требования
 
-- **Docker Desktop** (запущен).
-- **Terraform CLI** — конфигурация лежит в `infra/`, провайдер `hashicorp/aws ~> 5.0` берётся из `infra/.terraform.lock.hcl`.
-- **Docker Compose v2** (`docker compose`, входит в Docker Desktop) — через него `Makefile` поднимает Floci, воркер и отправитель заданий.
-- **make в cmd-оболочке Windows.** Цели `provision`, `deploy`, `clean` используют `>nul 2>&1`, `timeout /t 10` и `if exist ... rmdir /s /q` — это cmd-синтаксис, в Git Bash/WSL эти цели сломаются. `make ci` от оболочки не зависит.
-- Локальный Python и `pip install -r requirements.txt` нужны **только для IDE/подсветки** — сам скрапер исполняется внутри Docker-образа, и Chromium для него ставится там же.
+## Команды
+
+| Цель | Описание |
+|------|----------|
+| `make setup` | Создать VM через Multipass, дождаться cloud-init, сгенерировать inventory |
+| `make provision` | `setup` + Ansible: создать `admin`, ужесточить SSH, установить Docker, развернуть стек |
+| `make deploy` | Только Ansible-развёртывание (без пересоздания VM) |
+| `make run URL=<url>` | Отправить одно задание на скрапинг (генерирует `job_id`, сохраняет в `.lab/last_job_id`) |
+| `make verify` | Проверить результат последнего задания: JSON, HTTP, отсутствие `.tmp`, пустой `XPENDING` |
+| `make fault-test` | Тест отказоустойчивости: падение до XACK → pending → рестарт → дообработка |
+| `make destroy` | Удалить VM и `.lab/` (идемпотентно) |
+| `make ci` | Статические проверки: yamllint, ansible-lint, syntax-check, docker compose config |
 
 ## Быстрый старт
 
 ```bash
-make provision    # 1) docker compose up -d floci (:4566), 2) terraform -chdir=infra init + apply (S3 + SQS)
-make deploy       # собирает образ quotes-scraper и запускает scraper-app в фоне
-make run          # отправляет одно задание в SQS — воркер его подхватит
-```
+# 1. Установить зависимости в WSL2
+pip install ansible ansible-lint yamllint
+ansible-galaxy collection install -r infra/ansible/requirements.yml
 
-Логи воркера и проверка результата:
+# 2. Создать и развернуть окружение
+make provision
 
-```bash
-docker logs -f scraper-app
-aws --endpoint-url=http://localhost:4566 s3 cp s3://scraper-results-bucket/result.json - ^
-    --access-key-id test --secret-access-key test --region us-east-1
-```
+# 3. Отправить задание и проверить результат
+make run URL=https://quotes.toscrape.com/scroll
+make verify
 
-Уборка:
+# 4. Тест отказоустойчивости
+make fault-test
 
-```bash
-make destroy    # terraform destroy + остановить и удалить floci-local
-make clean      # удалить контейнер scraper-app, образ quotes-scraper и папку out/
-```
+# 5. Удалить окружение
+make destroy
 
-## Цели Makefile
+## Идемпотентность
 
-| Цель | Что делает |
-|---|---|
-| `build` | `docker build -t quotes-scraper .` (вызывается автоматически из `deploy`) |
-| `provision` | `docker compose up -d floci` (идемпотентно), ожидание 10 сек, `terraform -chdir=infra init` + `apply -auto-approve` |
-| `deploy` | `build`, затем `docker compose up -d --no-deps scraper` (контейнер `scraper-app`, env из compose) |
-| `run` | `docker compose run --rm --no-deps send-task` — одноразовый контейнер с `python src/send_task.py` |
-| `destroy` | `terraform -chdir=infra destroy -auto-approve`, затем `docker compose down -v` (контейнеры + volume с данными Floci) |
-| `ci` | `terraform -chdir=infra fmt -check`, `init -backend=false`, `validate`, `plan` и `docker compose config --quiet` |
-| `clean` | удаление контейнера, образа и legacy-папки `out/` |
+Повторный `make provision` или `make deploy` при неизменных исходниках даёт `changed=0` (второй прогон ничего не меняет): apt-кэш обновляется только при первом запуске и при смене файла репозитория Docker, образ пересобирается только при изменении исходников.
 
-## Переменные окружения
+## Безопасность
 
-| Переменная | Значение | Обязательна | Кто читает |
-|---|---|---|---|
-| `AWS_ENDPOINT_URL` | `http://host.docker.internal:4566` (подставляется и по default в коде) | нет | `main.py`, `send_task.py` |
-| `SQS_QUEUE_URL` | `http://host.docker.internal:4566/000000000000/scraper-tasks-queue` | **да** | `main.py`, `send_task.py` |
-| `S3_BUCKET_NAME` | `scraper-results-bucket` | **да** (`main.py` выходит с кодом 1) | `main.py` |
-
-Значения по умолчанию живут в `docker-compose.yaml` (интерполяция `${VAR:-значение}`), поэтому `make deploy`/`make run` можно перезапустить с другими именами ресурсов, не правя compose: `set SQS_QUEUE_URL=... && make run`. Канонический URL очереди отдаёт `terraform -chdir=infra output tasks_queue_url`.
-
-`host.docker.internal` (в compose — `extra_hosts: ["host.docker.internal:host-gateway"]`) вместо `localhost`, потому что изнутри контейнера `localhost` — это сам контейнер, а не Floci. Креды `test`/`test` и регион `us-east-1` заданы дефолтами в `infra/variables.tf` и захардкожены в коде Python — их достаточно только для локальной эмуляции, для реального AWS их нужно вынести в переменные/секреты.
-
-## Docker-образ
-
-Multistage на базе `python:3.13.7-bookworm`, чтобы тяжёлые слои не пересобирались при каждой правке кода:
-
-1. `browser` — ставит `playwright` и скачивает Chromium в `/ms-playwright`.
-2. `deps` — создаёт venv в `/opt/venv` и ставит `requirements.txt` (слой кэшируется по `COPY requirements.txt`).
-3. `runner` — копирует `/opt/venv` и `/ms-playwright` из предыдущих стадий, доустанавливает системные библиотеки браузера (`playwright install-deps chromium`), добавляет `src/` и задаёт `CMD ["python", "src/main.py"]`.
+- cloud-init создаёт только временного пользователя `bootstrap`
+- Ansible создаёт постоянного `admin` с ключом и sudo, затем удаляет bootstrap
+- SSH: `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`
+- `admin` не входит в группу `docker` (все docker-команды через `become`)
+- Docker Engine включён и запущен через systemd (`enabled` + `active`), проверка `docker info`
+- Порт Redis (6379) не публикуется наружу
 
 ## CI
 
-`.github/workflows/ci.yml` срабатывает на `push` в ветки `main` и `Terraform`, `runs-on: ubuntu-latest`: `actions/checkout@v4` → `hashicorp/setup-terraform@v3` → `make ci`. Проверки статические (`fmt -check`, `init -backend=false`, `validate`, `plan`) плюс `docker compose config --quiet`, поэтому запущенный Floci в CI не нужен — `plan` не обращается к эндпоинтам из `infra/`. Остальные цели в CI не выполняются: они cmd-специфичны.
+GitHub Actions запускает `make ci` при push в `main`/`feat/ansible-deploy` и при PR в `main`. Проверки статические (без запуска VM).
 
-## Известные особенности
-
-- **Гарантия at-least-once.** `visibility_timeout_seconds` и DLQ в `infra/main.tf` не заданы, то есть дефолтные 30 секунд (Terraform это прямо показывает в `plan`). Если скрапинг займёт дольше, сообщение вернётся в очередь и будет обработано повторно, перезаписав `result.json`.
-- Готовность Floci в `provision` ожидается фиксированным `timeout /t 10`, а не health-check — при медленном старте Docker первый `terraform apply` может не успеть.
-- Данные Floci лежат в volume `floci-data` (в образе это `/app/data`, куда он пишет по `FLOCI_STORAGE_PERSISTENT_PATH`), поэтому повторный `make provision` видит существующие bucket и queue и не меняет инфраструктуру. `make destroy` удаляет и volume — следующий `make provision` стартует с чистого состояния. Если на машине остался контейнер `floci-local`, поднятый прежней версией `provision` через `docker run`, удалите его один раз вручную (`docker rm -f floci-local`), иначе порт 4566 может быть занят.
-- В конце `scrape_quotes()` стоит фиксированный `asyncio.sleep(1)` после прокрутки: если страница подгружает цитаты дольше, часть из них может не попасть в результат.
-- Упоминания `out/result.json` в `.gitignore`, `.dockerignore` и в цели `clean` — наследие прошлой версии, когда скрапер писал файл на диск. Сейчас воркер пишет исключительно в S3, и папки `out/` в проекте нет.
-- Состояние Terraform локальное: `infra/terraform.tfstate` (в `.gitignore`), то есть между машинами и между оболочками оно не разделяется.

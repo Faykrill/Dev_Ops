@@ -1,0 +1,12 @@
+---
+- name: Развернуть приложение (Docker, скрапер, Redis, Nginx)
+  hosts: all
+  become: true
+  vars:
+    ansible_user: admin
+    repo_root: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+    app_dir: /srv/quotes-scraper/app
+    results_dir: /srv/quotes-scraper/results
+  roles:
+    - docker_engine
+    - scraper

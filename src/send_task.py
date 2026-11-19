@@ -1,21 +1,30 @@
+"""Продюсер: XADD одного задания в stream jobs. job_id печатается в stdout."""
+import argparse
 import os
-import boto3
+import sys
+import uuid
 
-def main():
-    endpoint = os.getenv("AWS_ENDPOINT_URL", "http://host.docker.internal:4566")
-    queue_url = os.getenv("SQS_QUEUE_URL")
-    
-    if not queue_url:
-        print("Ошибка: Не задана переменная окружения SQS_QUEUE_URL")
-        exit(1)
-    
-    sqs = boto3.client(
-        'sqs', endpoint_url=endpoint, region_name='us-east-1',
-        aws_access_key_id='test', aws_secret_access_key='test'
-    )
-    
-    sqs.send_message(QueueUrl=queue_url, MessageBody='{"action": "scrape"}')
-    print("Задание успешно отправлено в SQS!")
+import redis
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("url")
+    p.add_argument("--job-id", default=None)
+    p.add_argument("--crash", action="store_true",
+                   help="fault-test: воркер упадёт до XACK при первой доставке")
+    args = p.parse_args()
+
+    job_id = args.job_id or uuid.uuid4().hex[:12]
+    r = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379/0"),
+                       decode_responses=True)
+    fields = {"job_id": job_id, "url": args.url}
+    if args.crash:
+        fields["crash"] = "1"
+    msg_id = r.xadd(os.environ.get("STREAM_NAME", "jobs"), fields)
+    print(job_id)
+    print(f"queued {msg_id}", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()

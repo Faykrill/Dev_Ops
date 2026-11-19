@@ -1,49 +1,56 @@
-IMAGE_NAME = quotes-scraper
-COMPOSE_FILE = docker-compose.yaml
-COMPOSE = docker compose -f $(COMPOSE_FILE)
-TF_DIR = infra
+SHELL := /bin/bash
 
-.PHONY: build provision deploy run clean destroy ci
+export VM_NAME := quotes-lab
+export MULTIPASS := multipass.exe
 
-build:
-	docker build -t $(IMAGE_NAME) .
+ANSIBLE_DIR := infra/ansible
+ANSIBLE := ANSIBLE_CONFIG=ansible.cfg ansible-playbook -i inventories/lab/hosts.yml
 
-provision:
-	@echo Проверка и запуск Floci...
-	$(COMPOSE) up -d floci
-	@echo Ожидание инициализации Floci (10 сек)...
-	@timeout /t 10 /nobreak >nul
-	terraform -chdir=$(TF_DIR) init
-	terraform -chdir=$(TF_DIR) apply -auto-approve
+.PHONY: setup destroy provision deploy run verify fault-test ci
 
-deploy: build
-	@echo Остановка предыдущей версии скрапера, если есть...
-	@docker rm -f scraper-app >nul 2>&1 || echo "Скрапер не был запущен."
-	$(COMPOSE) up -d --no-deps scraper
-	@echo Скрапер запущен в фоне и ожидает задания.
-
-run:
-	@echo Отправка задания в SQS...
-	$(COMPOSE) run --rm --no-deps send-task
-	@echo Задание отправлено. Скрапер должен его обработать.
-
-clean:
-	@echo Очистка...
-	@docker rm -f scraper-app >nul 2>&1 || echo "Скрапер не запущен."
-	@docker rmi $(IMAGE_NAME) >nul 2>&1 || echo "Образ не найден."
-	@if exist out rmdir /s /q out
+setup:
+	@bash scripts/setup.sh
 
 destroy:
-	@echo Удаление инфраструктуры...
-	terraform -chdir=$(TF_DIR) destroy -auto-approve
-	$(COMPOSE) down -v
+	@bash scripts/destroy.sh
+
+provision: setup
+	cd $(ANSIBLE_DIR) && $(ANSIBLE) playbooks/bootstrap.yml
+	cd $(ANSIBLE_DIR) && $(ANSIBLE) playbooks/site.yml
+
+deploy: setup
+	cd $(ANSIBLE_DIR) && $(ANSIBLE) playbooks/site.yml
+
+run:
+	@test -n "$(URL)" || { echo "Использование: make run URL=<url> [CRASH=1]"; exit 1; }
+	@mkdir -p .lab
+	@JOB_ID="job-$$(date +%s)-$$RANDOM"; \
+	echo "$$JOB_ID" > .lab/last_job_id; \
+	echo "Отправляю задание job_id=$$JOB_ID"; \
+	cd $(ANSIBLE_DIR) && $(ANSIBLE) playbooks/run.yml \
+	  -e job_id="$$JOB_ID" -e job_url="$(URL)" $(if $(CRASH),-e crash="$(CRASH)")
+
+verify:
+	@test -f .lab/last_job_id || { echo "Сначала выполните make run URL=..."; exit 1; }
+	@JOB_ID="$$(cat .lab/last_job_id)"; \
+	cd $(ANSIBLE_DIR) && $(ANSIBLE) playbooks/verify.yml -e job_id="$$JOB_ID"
+
+fault-test:
+	@mkdir -p .lab
+	@JOB_ID="ft-$$(date +%s)-$$RANDOM"; \
+	echo "fault-test job_id=$$JOB_ID"; \
+	cd $(ANSIBLE_DIR) && $(ANSIBLE) playbooks/fault_test.yml \
+	  -e job_id="$$JOB_ID" -e job_url="https://quotes.toscrape.com/scroll"
 
 ci:
-	@echo Запуск CI проверок Terraform...
-	terraform -chdir=$(TF_DIR) fmt -check
-	terraform -chdir=$(TF_DIR) init -backend=false
-	terraform -chdir=$(TF_DIR) validate
-	terraform -chdir=$(TF_DIR) plan
-	@echo Проверка docker-compose.yaml...
-	$(COMPOSE) config --quiet
-	@echo CI проверки пройдены успешно!
+	@echo "==> Установка коллекций Ansible"
+	cd $(ANSIBLE_DIR) && ansible-galaxy collection install -r requirements.yml
+	@echo "==> Проверка YAML (yamllint)"
+	find infra deploy -name '*.yml' -o -name '*.yaml' | xargs yamllint -c .yamllint
+	@echo "==> Ansible lint"
+	cd $(ANSIBLE_DIR) && ansible-lint playbooks/ roles/
+	@echo "==> Синтаксис playbook-ов"
+	cd $(ANSIBLE_DIR) && ANSIBLE_CONFIG=ansible.cfg ansible-playbook -i inventories/hosts.example.yml --syntax-check playbooks/bootstrap.yml playbooks/site.yml playbooks/verify.yml playbooks/run.yml playbooks/fault_test.yml
+	@echo "==> Docker Compose config"
+	docker compose -f deploy/compose.yaml config --quiet
+	@echo "CI OK"

@@ -1,0 +1,52 @@
+---
+- name: Каталог приложения на VM
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Исходники приложения (код, Dockerfile, конфиги деплоя)
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - src: "{{ repo_root }}/src/"
+      dest: "{{ app_dir }}/src/"
+    - src: "{{ repo_root }}/deploy/"
+      dest: "{{ app_dir }}/deploy/"
+    - src: "{{ repo_root }}/Dockerfile"
+      dest: "{{ app_dir }}/Dockerfile"
+    - src: "{{ repo_root }}/requirements.txt"
+      dest: "{{ app_dir }}/requirements.txt"
+  register: scraper_app_sources
+
+- name: Каталог результатов
+  ansible.builtin.file:
+    path: "{{ results_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Проверить, существует ли образ скрапера
+  ansible.builtin.command:
+    cmd: docker image inspect quotes-scraper:latest
+  register: scraper_image_check
+  failed_when: false
+  changed_when: false
+
+- name: Собрать образ скрапера
+  ansible.builtin.command:
+    cmd: docker build --tag quotes-scraper:latest {{ app_dir }}
+  when: scraper_app_sources is changed or scraper_image_check.rc != 0
+  changed_when: true
+
+- name: Поднять стек (Redis, скрапер, Nginx)
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}/deploy"
+    project_name: quotes-scraper
+    state: present
+    pull: missing
