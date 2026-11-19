@@ -72,13 +72,20 @@ make fault-test
 # 5. Удалить окружение
 make destroy
 
-Идемпотентность
-Повторный make provision или make deploy при неизменных исходниках даёт changed=0 (второй прогон ничего не меняет).
-Безопасность
-cloud-init создаёт только временного пользователя bootstrap
-Ansible создаёт постоянного admin с ключом и sudo, затем удаляет bootstrap
-SSH: PermitRootLogin no, PasswordAuthentication no, KbdInteractiveAuthentication no
-admin не входит в группу docker (все docker-команды через become)
-Порт Redis (6379) не публикуется наружу
-CI
-GitHub Actions запускает make ci при push в main/feat/ansible-deploy и при PR в main. Проверки статические (без запуска VM).
+## Идемпотентность
+
+Повторный `make provision` или `make deploy` при неизменных исходниках даёт `changed=0` (второй прогон ничего не меняет): apt-кэш обновляется только при первом запуске и при смене файла репозитория Docker, образ пересобирается только при изменении исходников.
+
+## Безопасность
+
+- cloud-init создаёт только временного пользователя `bootstrap`
+- Ansible создаёт постоянного `admin` с ключом и sudo, затем удаляет bootstrap
+- SSH: `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`
+- `admin` не входит в группу `docker` (все docker-команды через `become`)
+- Docker Engine включён и запущен через systemd (`enabled` + `active`), проверка `docker info`
+- Порт Redis (6379) не публикуется наружу
+
+## CI
+
+GitHub Actions запускает `make ci` при push в `main`/`feat/ansible-deploy` и при PR в `main`. Проверки статические (без запуска VM).
+

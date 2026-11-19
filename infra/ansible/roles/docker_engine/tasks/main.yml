@@ -1,8 +1,10 @@
 ---
+# cache_valid_time завышен намеренно: повторный прогон не должен обновлять кэш,
+# иначе задача стабильно даёт changed=1 и make provision не идемпотентен.
 - name: Обновить apt-кэш, если он устарел
   ansible.builtin.apt:
     update_cache: true
-    cache_valid_time: 3600
+    cache_valid_time: 86400
 
 - name: Пакеты для работы с репозиториями
   ansible.builtin.apt:
@@ -38,6 +40,12 @@
       signed-by=/etc/apt/keyrings/docker.asc]
       https://download.docker.com/linux/ubuntu
       {{ ansible_facts['distribution_release'] }} stable
+  notify: Обновить apt-кэш Docker
+
+# Handler обязан отработать до установки пакетов, иначе docker-ce не найдётся
+# в свежем кэше на первом прогоне.
+- name: Применить изменения репозитория перед установкой
+  ansible.builtin.meta: flush_handlers
 
 - name: Docker Engine, CLI, Buildx и Compose plugin
   ansible.builtin.apt:
@@ -48,5 +56,22 @@
       - docker-buildx-plugin
       - docker-compose-plugin
     state: present
-    update_cache: true
-    cache_valid_time: 0
+
+- name: Включить и запустить Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+
+# Exit code 0 от `docker info` — доказательство, что демон реально отвечает,
+# а не только «юнит включён» (в чек-мод не пускаем, иначе проверка обнулится).
+- name: Убедиться, что демон отвечает
+  ansible.builtin.command: docker info
+  register: docker_engine_info
+  changed_when: false
+  failed_when: docker_engine_info.rc != 0
+  check_mode: false
+
+- name: Версия Docker
+  ansible.builtin.debug:
+    msg: "Docker enabled + running, демон отвечает (rc={{ docker_engine_info.rc }})"

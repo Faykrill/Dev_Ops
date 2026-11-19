@@ -10,7 +10,7 @@
       ansible.builtin.set_fact:
         producer_cmd: >-
           docker exec scraper python /app/src/send_task.py
-          {% if crash | default('') | bool %}--crash{% endif %}
+          {% if crash | default(false, true) | bool %}--crash{% endif %}
           --job-id {{ job_id }} {{ job_url }}
 
     - name: Запустить продюсер
@@ -19,4 +19,6 @@
 
     - name: Подтвердить отправку
       ansible.builtin.debug:
-        msg: "Задание job_id={{ job_id }} добавлено в стрим jobs{% if crash | default('') | bool %} (с crash-флагом){% endif %}"
+        msg: >-
+          Задание job_id={{ job_id }} добавлено в стрим jobs
+          {% if crash | default(false, true) | bool %}(с crash-флагом){% endif %}

@@ -100,6 +100,21 @@
         status_code: [200]
       changed_when: false
 
+    - name: Посчитать файлы результата этого задания
+      ansible.builtin.find:
+        paths: "{{ results_dir }}"
+        patterns: "{{ job_id }}*.json"
+      register: job_files
+      changed_when: false
+
+    - name: Убедиться, что файл результата ровно один (повтор не создал второй)
+      ansible.builtin.assert:
+        that:
+          - job_files.matched == 1
+        fail_msg: >-
+          Повторная доставка создала второй файл:
+          {{ job_files.files | map(attribute='path') | list }}
+
     - name: Найти временные файлы
       ansible.builtin.find:
         paths: "{{ results_dir }}"

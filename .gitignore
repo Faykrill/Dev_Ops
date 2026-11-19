@@ -12,6 +12,12 @@ venv/
 results/
 out/
 
+# Terraform-артефакты от прошлой лабы (не коммитить)
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+*.tfrc
+
 # Редакторы / ОС
 .idea/
 .vscode/
